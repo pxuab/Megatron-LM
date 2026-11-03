@@ -24,8 +24,9 @@ def test_beta_sigmoid_forward_and_backward(cutedsl: bool) -> None:
         A_log=torch.zeros(2, device=device),
         dt_bias=torch.zeros(2, device=device),
         training=False,
-        config=SimpleNamespace(gdp_cutedsl_kernel=cutedsl),
+        config=SimpleNamespace(gdp_cutedsl_kernel=cutedsl, gdp_g_clamp_value=None),
     )
+    mixer._clamp_g = GatedDeltaProductMixer._clamp_g.__get__(mixer)
     beta, _ = GatedDeltaProductMixer._compute_gating(cast(GatedDeltaProductMixer, mixer), ba)
     expected_shape = (2, 6) if cutedsl else (2, 3, 2)
     torch.testing.assert_close(beta, logits.sigmoid().reshape(expected_shape), rtol=0, atol=0)
