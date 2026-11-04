@@ -50,7 +50,7 @@ def test_validation_is_read_only_and_finalization_runs_once(monkeypatch, run_con
     assert cfg.rng.te_rng_tracker
     assert transformer.use_te_rng_tracker
     if not inference:
-        assert cfg.ddp.grad_buffer_offload
+        assert cfg.data_parallel.grad_buffer_offload
     after = copy.deepcopy(cfg.to_dict())
     cfg.validate()
     cfg.finalize()
@@ -68,8 +68,8 @@ def test_invalid_configuration_is_not_partially_finalized(monkeypatch, run_confi
     run_config.train.micro_batch_size = 1
     run_config.train.global_batch_size = 8
     run_config.rl = RLConfig(perform_rl_step=True, rl_offload_optimizer_during_inference=True)
-    run_config.ddp.fp8_param_gather = True
-    run_config.ddp.reuse_grad_buf_for_mxfp8_param_ag = True
+    run_config.data_parallel.fp8_param_gather = True
+    run_config.data_parallel.reuse_grad_buf_for_mxfp8_param_ag = True
     before = copy.deepcopy(run_config.to_dict())
     with pytest.raises(ValueError, match="parameters share the gradient-buffer storage"):
         run_config.finalize()
@@ -78,10 +78,10 @@ def test_invalid_configuration_is_not_partially_finalized(monkeypatch, run_confi
     assert not run_config.rng.te_rng_tracker
 
     # A rejected configuration remains editable and can be finalized after correction.
-    run_config.ddp.reuse_grad_buf_for_mxfp8_param_ag = False
+    run_config.data_parallel.reuse_grad_buf_for_mxfp8_param_ag = False
     run_config.finalize()
     assert run_config._finalized
-    assert run_config.ddp.grad_buffer_offload
+    assert run_config.data_parallel.grad_buffer_offload
     assert run_config.rng.te_rng_tracker
 
 
@@ -115,7 +115,7 @@ def test_finalization_resolves_layer_wise_ddp_flag(
     run_config.optimizer.optimizer = optimizer
     run_config.optimizer.use_distributed_optimizer = use_distributed_optimizer
     run_config.optimizer.use_layer_wise_distributed_optimizer = use_layer_wise_distributed_optimizer
-    run_config.ddp.use_distributed_optimizer = use_distributed_optimizer
+    run_config.data_parallel.use_distributed_optimizer = use_distributed_optimizer
 
     run_config.finalize()
 
@@ -124,7 +124,7 @@ def test_finalization_resolves_layer_wise_ddp_flag(
     assert run_config.optimizer.use_distributed_optimizer is (not layer_wise)
     # Layout-enabled wrapping opts back into DistOpt buffers later; finalization
     # must preserve the legacy baseline for either layout setting.
-    assert run_config.ddp.use_distributed_optimizer is (not layer_wise)
+    assert run_config.data_parallel.use_distributed_optimizer is (not layer_wise)
 
 
 def test_serialization_starts_a_new_lifecycle(monkeypatch, run_config):

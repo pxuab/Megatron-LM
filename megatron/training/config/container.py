@@ -26,6 +26,7 @@ from megatron.core.num_microbatches_calculator import (
 from megatron.core.optimizer import OptimizerConfig
 from megatron.core.tensor_parallel.gtp_parallel_layout import GTPParallelLayout
 from megatron.training.config.common_config import DistributedInitConfig, ProfilingConfig, RNGConfig
+from megatron.training.config.data_parallel_config import migrate_data_parallel_config
 from megatron.training.config.dataset_config import DataConfig
 from megatron.training.config.inference_config import InferenceSetupConfig
 from megatron.training.config.instantiate_utils import InstantiationMode, instantiate
@@ -107,6 +108,9 @@ class ConfigContainerBase:
         config_dict = copy.deepcopy(config_dict)
 
         assert "_target_" in config_dict
+
+        if issubclass(cls, PretrainConfigContainer):
+            config_dict = migrate_data_parallel_config(config_dict)
 
         # Apply backward compatibility: remove init=False fields that may have been
         # serialized by older versions (these are computed in __post_init__)
@@ -292,11 +296,11 @@ class PretrainConfigContainer(ConfigContainerBase):
     """The dataset config, the loader settings and the dataset class. The GPT entry points build
     their datasets from it (``gpt_data_config_from_args``); every other entry point carries the
     loader settings only (``data.dataset is None``). See ``megatron.training.config.dataset_config``."""
-    data_parallel: DistributedDataParallelConfig | FullyShardedDataParallelConfig | None = None
+    data_parallel: DistributedDataParallelConfig | FullyShardedDataParallelConfig = field(
+        default_factory=DistributedDataParallelConfig
+    )
     """Configuration whose type selects the data-parallel implementation."""
 
-    ddp: DistributedDataParallelConfig | None = None
-    """Legacy alternative to data_parallel, retained for existing Python and YAML callers."""
     dist: DistributedInitConfig = field(default_factory=DistributedInitConfig)
     rng: RNGConfig = field(default_factory=RNGConfig)
     logger: LoggerConfig
@@ -308,23 +312,12 @@ class PretrainConfigContainer(ConfigContainerBase):
     rerun_state_machine: RerunStateMachineConfig = field(default_factory=RerunStateMachineConfig)
     straggler: StragglerDetectionConfig | None = None
 
-    def __post_init__(self) -> None:
-        if self.data_parallel is not None and self.ddp is not None:
-            raise ValueError("Specify only one of data_parallel and ddp")
-        if self.data_parallel is None and self.ddp is None:
-            self.ddp = DistributedDataParallelConfig()
-
     @property
-    def data_parallel_config(
-        self,
-    ) -> DistributedDataParallelConfig | FullyShardedDataParallelConfig:
-        """Return the active configuration without maintaining a second mutable copy."""
-        if self.data_parallel is not None and self.ddp is not None:
-            raise ValueError("Specify only one of data_parallel and ddp")
-        config = self.data_parallel if self.data_parallel is not None else self.ddp
-        if not isinstance(config, (DistributedDataParallelConfig, FullyShardedDataParallelConfig)):
+    def data_parallel_config(self) -> DistributedDataParallelConfig | FullyShardedDataParallelConfig:
+        """Return the native data-parallel configuration."""
+        if not isinstance(self.data_parallel, (DistributedDataParallelConfig, FullyShardedDataParallelConfig)):
             raise TypeError("data_parallel must be a DDP or FSDP configuration")
-        return config
+        return self.data_parallel
 
     def _resolve_batch_sizes(
         self, batch_parallel_size: int | None = None
@@ -424,13 +417,13 @@ class PretrainConfigContainer(ConfigContainerBase):
                 raise ValueError(
                     "RL gradient-buffer offload requires DistributedDataParallelConfig"
                 )
-        else:
+        elif isinstance(data_parallel_config, DistributedDataParallelConfig):
             self.rl.validate_ddp_config(data_parallel_config)
         super().validate()
         global_batch_size, _, _ = self._resolve_batch_sizes()
         self._validate_rl_config(global_batch_size)
         self.optimizer.validate_run(
-            ddp_config=self.ddp,
+            data_parallel_config=self.data_parallel_config,
             use_torch_fsdp2=self.dist.use_torch_fsdp2,
             ckpt_format=self.checkpoint.ckpt_format,
         )
@@ -601,8 +594,10 @@ class PretrainConfigContainer(ConfigContainerBase):
         ) = batch_sizes
         super()._finalize()
         self.optimizer.finalize_optimizer_config()
-        if self.optimizer.use_layer_wise_distributed_optimizer:
-            self.ddp.use_distributed_optimizer = False
+        if self.optimizer.use_layer_wise_distributed_optimizer and isinstance(
+            self.data_parallel_config, DistributedDataParallelConfig
+        ):
+            self.data_parallel_config.use_distributed_optimizer = False
         self.scheduler.finalize_scheduler_config(self.optimizer.weight_decay)
         self._resolve_scheduler_step_fields()
         if dataset is not None:
